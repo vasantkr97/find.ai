@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: var(--font-jb, ui-monospace), "SFMono-Regular", Menlo, monospace;
+}
+
+:root {
+  --color-bg: #212121;
+  --color-sidebar: #0f0f0f;
+  --color-card: #2a2a2a;
+  --color-card-hover: #333333;
+  --color-card-active: #3b3b3b;
+  --color-border: #2f2f2f;
+  --color-border-hover: #424242;
+  --color-text: #ececec;
+  --color-text-secondary: #b4b4b4;
+  --color-text-muted: #676767;
+  --color-accent: #a8a8a8;
+  --color-accent-hover: #d4d4d4;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3a transparent;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4a4a4a; }
+
+/* ── Animations ── */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+
+.shimmer {
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.02) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: shimmer 2.5s infinite;
+}
+
+/* ── User message ── */
+
+.user-bubble {
+  background: #2f2f2f;
+  color: var(--color-text);
+  border-radius: 1.25rem 1.25rem 0.375rem 1.25rem;
+}
+
+/* ── Assistant message ── */
+
+.assistant-bubble {
+  background: transparent;
+  border-radius: 1.25rem 1.25rem 1.25rem 0.375rem;
+}
+
+/* ── Prose / Markdown ── */
+
+.prose { line-height: 1.75; }
+
+.prose h1, .prose h2, .prose h3 {
+  color: var(--color-text);
+  font-weight: 600;
+  margin-top: 1.25em;
+  margin-bottom: 0.5em;
+}
+
+.prose h1 { font-size: 1.5rem; }
+.prose h2 { font-size: 1.25rem; }
+.prose h3 { font-size: 1.1rem; }
+.prose p { margin-bottom: 0.75em; color: var(--color-text-secondary); }
+
+.prose a {
+  color: #b4b4b4;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose a:hover { color: #ececec; }
+
+.prose ul, .prose ol { padding-left: 1.5em; margin-bottom: 0.75em; }
+.prose li { margin-bottom: 0.25em; color: var(--color-text-secondary); }
+
+.prose code {
+  background: #1e1e1e;
+  padding: 0.15em 0.4em;
+  border-radius: 6px;
+  font-size: 0.88em;
+  color: #d4d4d4;
+}
+
+.prose pre {
+  background: #141414;
+  padding: 1em;
+  border-radius: 12px;
+  overflow-x: auto;
+  margin-bottom: 1em;
+}
+
+.prose blockquote {
+  border-left: 3px solid #4a4a4a;
+  padding-left: 1em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75em;
+}
+
+.prose strong { color: var(--color-text); font-weight: 600; }
+
+/* ── Print ── */
+
+@media print {
+  body { background: white !important; color: black !important; }
+}
