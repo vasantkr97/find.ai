@@ -6,6 +6,7 @@ from app.api.routes import api_router
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
+from app.db.init import init_db
 from app.middleware.http import install_http_middleware
 from app.tools import register_default_tools
 
@@ -28,6 +29,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    if settings.is_dev:
+        await init_db()
     register_default_tools()
 
 

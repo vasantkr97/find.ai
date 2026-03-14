@@ -19,14 +19,24 @@ class LLMError(AppError):
 
 
 class LLMRateLimitError(LLMError):
-    def __init__(self, retry_after_ms: int) -> None:
-        super().__init__("LLM rate limit exceeded", {"retry_after_ms": retry_after_ms})
+    def __init__(self, retry_after_ms: int, detail: str | None = None) -> None:
+        message = "LLM rate limit exceeded"
+        if detail:
+            message = f"{message}: {detail}"
+        context: dict[str, Any] = {"retry_after_ms": retry_after_ms}
+        if detail:
+            context["detail"] = detail
+        super().__init__(message, context)
         self.retry_after_ms = retry_after_ms
 
 
 class LLMParseError(LLMError):
-    def __init__(self, message: str, raw_output: str) -> None:
-        super().__init__(message, {"raw_output": raw_output[:500]})
+    def __init__(self, message: str, raw_output: str, context: dict[str, Any] | None = None) -> None:
+        self.raw_output = raw_output
+        payload = {"raw_output": raw_output[:2000]}
+        if context:
+            payload.update(context)
+        super().__init__(message, payload)
 
 
 class ToolError(AppError):
@@ -81,4 +91,3 @@ def to_error_message(err: Exception | BaseException | str | object) -> str:
     if isinstance(err, str):
         return err
     return "Unknown error"
-

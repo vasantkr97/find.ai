@@ -1,7 +1,7 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,21 +28,64 @@ from app.services.drive.ingest import ingest_all_files
 from app.services.vector.store import get_vector_store
 
 router = APIRouter()
+OAUTH_STATE_COOKIE = "oauth_state"
+OAUTH_VERIFIER_COOKIE = "oauth_code_verifier"
+OAUTH_COOKIE_MAX_AGE_SEC = 10 * 60
+
+
+def _oauth_cookie_options() -> dict[str, object]:
+    settings = get_settings()
+    return {
+        "httponly": True,
+        "secure": settings.is_prod,
+        "samesite": "lax",
+        "path": "/api/drive/callback",
+        "max_age": OAUTH_COOKIE_MAX_AGE_SEC,
+    }
 
 
 @router.get("/drive/auth")
-async def drive_auth() -> dict[str, str]:
-    return {"url": get_auth_url()}
+async def drive_auth() -> JSONResponse:
+    url, state, code_verifier = get_auth_url()
+    response = JSONResponse({"url": url})
+    cookie = _oauth_cookie_options()
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE,
+        value=state,
+        httponly=cookie["httponly"],
+        secure=cookie["secure"],
+        samesite=cookie["samesite"],
+        path=cookie["path"],
+        max_age=cookie["max_age"],
+    )
+    if code_verifier:
+        response.set_cookie(
+            key=OAUTH_VERIFIER_COOKIE,
+            value=code_verifier,
+            httponly=cookie["httponly"],
+            secure=cookie["secure"],
+            samesite=cookie["samesite"],
+            path=cookie["path"],
+            max_age=cookie["max_age"],
+        )
+    return response
 
 
 @router.get("/drive/callback")
 async def drive_callback(
-    code: str | None = None, db: AsyncSession = Depends(get_db)
+    request: Request, code: str | None = None, state: str | None = None, db: AsyncSession = Depends(get_db)
 ) -> RedirectResponse:
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
-    payload = await exchange_code_for_tokens(code)
+    stored_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if stored_state and state and stored_state != state:
+        raise HTTPException(status_code=400, detail="OAuth state mismatch")
+    if stored_state and not state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state")
+
+    code_verifier = request.cookies.get(OAUTH_VERIFIER_COOKIE)
+    payload = await exchange_code_for_tokens(code, code_verifier=code_verifier)
     email = payload["email"]
     name = payload.get("name")
     if not email:
@@ -73,6 +116,8 @@ async def drive_callback(
         path=cookie["path"],
         max_age=cookie["max_age"],
     )
+    redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/api/drive/callback")
+    redirect.delete_cookie(OAUTH_VERIFIER_COOKIE, path="/api/drive/callback")
     return redirect
 
 

@@ -41,7 +41,7 @@ class WebSearchTool(BaseTool):
             return ToolResult(success=False, error="SERPER_API_KEY not configured")
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
                 response = await client.post(
                     "https://google.serper.dev/search",
                     headers={"X-API-KEY": cfg.SERPER_API_KEY, "Content-Type": "application/json"},
@@ -69,4 +69,3 @@ class WebSearchTool(BaseTool):
 
 
 web_search_tool = WebSearchTool()
-

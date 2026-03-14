@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
+from app.core.errors import LLMParseError
 from app.schemas.types import (
     AgentPlan,
     AgentStep,
@@ -13,14 +14,14 @@ from app.schemas.types import (
     NextToolCall,
     SynthesisResult,
 )
-from app.services.llm import LLMUsage, chat_json, chat_stream
+from app.services.llm import LLMUsage, chat_json, chat_stream, parse_json_object
 from app.tools.registry import get_tool_registry
 
 PLAN_SYSTEM_PROMPT = """You are an autonomous AI research agent called Archon.
 When given a task, create a concise plan with clear steps.
 
 Available tools:
-{tools}
+__TOOLS__
 
 Respond in JSON:
 {
@@ -42,7 +43,7 @@ DECIDE_SYSTEM_PROMPT = """You are Archon executing a task step by step.
 Given task, plan, and previous steps, decide next action.
 
 Available tools:
-{tools}
+__TOOLS__
 
 Respond in JSON with either:
 1) tool call:
@@ -92,17 +93,127 @@ class DecisionResponse(BaseModel):
     answer: Any = None
 
 
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value)
+
+
+def _normalize_tool(value: Any) -> str | None:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned if cleaned else None
+    return None
+
+
+def _find_key(payload: dict[str, Any], target: str) -> str | None:
+    if target in payload:
+        return target
+    target_lower = target.lower()
+    for key in payload.keys():
+        if key.strip().lower() == target_lower:
+            return key
+    for key in payload.keys():
+        if target_lower in key.lower():
+            return key
+    return None
+
+
+def _coerce_plan_payload(payload: Any) -> AgentPlan:
+    analysis = ""
+    steps_value: Any = []
+
+    if isinstance(payload, dict):
+        analysis_key = _find_key(payload, "analysis")
+        if analysis_key:
+            analysis = _normalize_text(payload.get(analysis_key))
+        steps_value = payload.get("steps")
+        if steps_value is None and isinstance(payload.get("plan"), dict):
+            plan_payload = payload["plan"]
+            if not analysis:
+                analysis = _normalize_text(plan_payload.get("analysis"))
+            steps_value = plan_payload.get("steps")
+    elif isinstance(payload, list):
+        steps_value = payload
+    elif isinstance(payload, str):
+        analysis = payload
+        steps_value = []
+
+    steps: list[dict[str, Any]] = []
+    if isinstance(steps_value, list):
+        for item in steps_value:
+            if isinstance(item, dict):
+                description = _normalize_text(
+                    item.get("description")
+                    or item.get("step")
+                    or item.get("task")
+                    or item.get("action")
+                )
+                reasoning = _normalize_text(item.get("reasoning") or item.get("why") or item.get("rationale"))
+                tool = _normalize_tool(item.get("tool") or item.get("tool_name"))
+                steps.append({"description": description, "tool": tool, "reasoning": reasoning})
+            else:
+                steps.append({"description": _normalize_text(item), "tool": None, "reasoning": ""})
+
+    steps = [step for step in steps if step["description"] or step["tool"] or step["reasoning"]]
+    if not steps:
+        steps = [
+            {
+                "description": "Provide the final answer.",
+                "tool": None,
+                "reasoning": "No tools required.",
+            }
+        ]
+
+    return AgentPlan.model_validate({"analysis": analysis or "Generated a concise plan.", "steps": steps})
+
+
+def _coerce_decision_payload(payload: Any) -> NextToolCall | NextComplete:
+    if isinstance(payload, dict):
+        type_value = _normalize_text(payload.get("type") or payload.get("action")).lower()
+        tool_value = _normalize_tool(payload.get("tool") or payload.get("tool_name"))
+        reasoning = _normalize_text(payload.get("reasoning") or payload.get("analysis"))
+        args = payload.get("args") if isinstance(payload.get("args"), dict) else {}
+        if type_value == "tool_call" or (tool_value and not type_value):
+            return NextToolCall(
+                type="tool_call",
+                reasoning=reasoning or "Executing the next tool.",
+                tool=tool_value or "",
+                args=args,
+            )
+        if type_value == "complete":
+            return NextComplete(
+                type="complete",
+                reasoning=reasoning or "Providing the best possible answer.",
+                answer=payload.get("answer") or payload.get("final") or payload.get("result") or "",
+            )
+    return NextComplete(
+        type="complete",
+        reasoning="Providing the best possible answer.",
+        answer=_normalize_text(payload),
+    )
+
+
+def _usage_from_context(err: LLMParseError) -> LLMUsage:
+    usage = err.context.get("usage") if isinstance(err.context, dict) else None
+    if isinstance(usage, dict):
+        return LLMUsage(
+            prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+        )
+    return LLMUsage()
+
+
 def _tools_description() -> str:
     return get_tool_registry().descriptions()
 
 
 def _prompt_messages(system_template: str, user_text: str) -> list[dict[str, str]]:
-    prompt = ChatPromptTemplate.from_messages([("system", system_template), ("user", "{input}")])
-    rendered = prompt.invoke({"input": user_text})
-    role_map = {"human": "user", "ai": "assistant", "system": "system"}
     return [
-        {"role": role_map.get(m.type, "user"), "content": str(m.content)}
-        for m in rendered.to_messages()
+        {"role": "system", "content": system_template},
+        {"role": "user", "content": user_text},
     ]
 
 
@@ -110,7 +221,7 @@ async def create_plan(
     task: str,
     previous_turns: list[dict[str, str]] | None = None,
 ) -> tuple[AgentPlan, LLMUsage]:
-    system = PLAN_SYSTEM_PROMPT.format(tools=_tools_description())
+    system = PLAN_SYSTEM_PROMPT.replace("__TOOLS__", _tools_description())
     if previous_turns:
         context = "\n\n".join(
             f"Turn {idx + 1}:\nQ: {row['task']}\nA: {row['answer'][:500]}"
@@ -118,21 +229,29 @@ async def create_plan(
         )
         system += f"\nPrevious conversation context:\n{context}"
     messages = _prompt_messages(system, f"Task: {task}")
-    parsed, usage = await chat_json(messages, PlanResponse, temperature=0.3)
-    plan = AgentPlan.model_validate(
-        {
-            "analysis": parsed.analysis,
-            "steps": [
-                {
-                    "description": step.get("description", ""),
-                    "tool": step.get("tool"),
-                    "reasoning": step.get("reasoning", ""),
-                }
-                for step in parsed.steps
-            ],
-        }
-    )
-    return plan, usage
+    try:
+        parsed, usage = await chat_json(messages, PlanResponse, temperature=0.3)
+        plan = AgentPlan.model_validate(
+            {
+                "analysis": parsed.analysis,
+                "steps": [
+                    {
+                        "description": step.get("description", ""),
+                        "tool": step.get("tool"),
+                        "reasoning": step.get("reasoning", ""),
+                    }
+                    for step in parsed.steps
+                ],
+            }
+        )
+        return plan, usage
+    except LLMParseError as err:
+        try:
+            payload = parse_json_object(err.raw_output)
+        except json.JSONDecodeError as parse_err:
+            raise err from parse_err
+        plan = _coerce_plan_payload(payload)
+        return plan, _usage_from_context(err)
 
 
 async def decide_next_step(
@@ -141,7 +260,7 @@ async def decide_next_step(
     steps: list[AgentStep],
     previous_turns: list[dict[str, str]] | None = None,
 ) -> tuple[NextToolCall | NextComplete, LLMUsage]:
-    system = DECIDE_SYSTEM_PROMPT.format(tools=_tools_description())
+    system = DECIDE_SYSTEM_PROMPT.replace("__TOOLS__", _tools_description())
     if previous_turns:
         context = "\n\n".join(
             f"Turn {idx + 1}:\nQ: {row['task']}\nA: {row['answer'][:500]}"
@@ -166,20 +285,27 @@ async def decide_next_step(
         + "Decide the next action."
     )
     messages = _prompt_messages(system, user_message)
-    parsed, usage = await chat_json(messages, DecisionResponse, temperature=0.2)
+    try:
+        parsed, usage = await chat_json(messages, DecisionResponse, temperature=0.2)
 
-    if parsed.type == "complete":
-        complete_action = NextComplete(
-            type="complete", reasoning=parsed.reasoning, answer=parsed.answer
+        if parsed.type == "complete":
+            complete_action = NextComplete(
+                type="complete", reasoning=parsed.reasoning, answer=parsed.answer
+            )
+            return complete_action, usage
+        tool_action = NextToolCall(
+            type="tool_call",
+            reasoning=parsed.reasoning,
+            tool=parsed.tool or "",
+            args=parsed.args or {},
         )
-        return complete_action, usage
-    tool_action = NextToolCall(
-        type="tool_call",
-        reasoning=parsed.reasoning,
-        tool=parsed.tool or "",
-        args=parsed.args or {},
-    )
-    return tool_action, usage
+        return tool_action, usage
+    except LLMParseError as err:
+        try:
+            payload = parse_json_object(err.raw_output)
+        except json.JSONDecodeError as parse_err:
+            raise err from parse_err
+        return _coerce_decision_payload(payload), _usage_from_context(err)
 
 
 def extract_citations_from_steps(steps: list[AgentStep]) -> list[Citation]:

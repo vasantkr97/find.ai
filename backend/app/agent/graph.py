@@ -44,6 +44,19 @@ def _emit(state: AgentGraphState, event: dict[str, Any]) -> None:
     emitter(event)
 
 
+def _track_step_event(step_payload: Any, tracked_steps: list[AgentStep]) -> None:
+    if not isinstance(step_payload, dict):
+        return
+    try:
+        parsed = AgentStep.model_validate(step_payload)
+    except Exception:  # noqa: BLE001
+        return
+    existing = {step.id: step for step in tracked_steps}
+    existing[parsed.id] = parsed
+    tracked_steps.clear()
+    tracked_steps.extend(sorted(existing.values(), key=lambda step: step.index))
+
+
 def _check_aborted(state: AgentGraphState) -> None:
     signal = state.get("signal")
     if signal and signal.is_set():
@@ -190,6 +203,14 @@ async def run_agent(
     signal: asyncio.Event | None = None,
 ) -> tuple[AgentResult, TokenUsage]:
     start = time.time()
+    tracked_steps: list[AgentStep] = []
+
+    def emit_with_tracking(event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        if event_type in {"step_start", "step_complete"}:
+            _track_step_event(event.get("step"), tracked_steps)
+        emit(event)
+
     initial: AgentGraphState = {
         "task": task,
         "max_steps": max_steps,
@@ -197,7 +218,7 @@ async def run_agent(
         "previous_turns": previous_turns or [],
         "steps": [],
         "usage": TokenUsage(),
-        "emit": emit,
+        "emit": emit_with_tracking,
         "signal": signal,
         "force_synthesize": False,
     }
@@ -222,7 +243,7 @@ async def run_agent(
         aborted = isinstance(err, AgentAbortedError)
         status: AgentState = "aborted" if aborted else "error"
         message = "The request was cancelled." if aborted else f"An error occurred while processing your request: {to_error_message(err)}"
-        partial_steps = initial.get("steps", [])
+        partial_steps = tracked_steps or initial.get("steps", [])
         result = AgentResult(
             answer=message,
             citations=[],
@@ -231,6 +252,6 @@ async def run_agent(
             durationMs=int((time.time() - start) * 1000),
             status="aborted" if aborted else "error",
         )
-        emit({"type": "state_change", "state": status})
-        emit({"type": "error", "error": to_error_message(err)})
+        emit_with_tracking({"type": "state_change", "state": status})
+        emit_with_tracking({"type": "error", "error": to_error_message(err)})
         return result, initial["usage"]

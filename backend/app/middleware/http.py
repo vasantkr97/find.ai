@@ -1,11 +1,12 @@
 import time
 from collections.abc import Callable
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.core.logging import get_logger
 from app.core.config import get_settings
+from app.core.errors import AppError
+from app.core.logging import get_logger
 from app.core.rate_limit import check_rate_limit, rate_limit_headers
 from app.core.request_context import request_id_var
 from app.core.utils import generate_id
@@ -92,7 +93,9 @@ def install_http_middleware(app: FastAPI) -> None:
 
         try:
             response = await call_next(request)
-        except Exception:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
+            if isinstance(err, (HTTPException, AppError)):
+                raise
             duration_ms = int((time.time() - start) * 1000)
             response = JSONResponse({"error": "Internal server error"}, status_code=500)
             log.exception(

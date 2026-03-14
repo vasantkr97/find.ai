@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, HttpUrl
@@ -6,9 +7,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parents[2] / ".env"),
+        extra="ignore",
+    )
 
-    OPENAI_API_KEY: str
+    OPENAI_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
     SERPER_API_KEY: str | None = None
     DATABASE_URL: str
 
@@ -19,7 +24,12 @@ class Settings(BaseSettings):
 
     NODE_ENV: Literal["development", "production", "test"] = "development"
 
+    LLM_PROVIDER: Literal["openai", "gemini", "ollama"] = "openai"
     LLM_MODEL: str = "gpt-4o-mini"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
+    OLLAMA_MODEL: str = "qwen2.5:7b"
+    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
     LLM_TEMPERATURE: float = Field(default=0.3, ge=0.0, le=2.0)
     LLM_MAX_TOKENS: int = Field(default=4096, gt=0)
     EMBEDDING_MODEL: str = "text-embedding-3-small"

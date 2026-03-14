@@ -73,7 +73,7 @@ class WebScrapeTool(BaseTool):
         timeout = cfg.WEB_SCRAPE_TIMEOUT_MS / 1000
 
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
                 response = await client.get(
                     url,
                     headers={

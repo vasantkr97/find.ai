@@ -15,13 +15,15 @@ async def health() -> dict[str, object]:
         "uptime": time.time() - _started_at,
     }
 
+
 @router.get("/debug")
 async def debug_env() -> dict[str, object]:
-    from app.core.config import get_settings
     import os
+
+    from app.core.config import get_settings
+
     return {
         "cwd": os.getcwd(),
         "has_google_client": bool(get_settings().GOOGLE_CLIENT_ID),
-        "google_client_value": get_settings().GOOGLE_CLIENT_ID
+        "google_client_value": get_settings().GOOGLE_CLIENT_ID,
     }
-
